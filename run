@@ -1,0 +1,10 @@
+#!/bin/bash
+
+mkdir -p /mnt/snap
+make clean
+umount /dev/snap1
+rmmod snap-agent
+make
+insmod ./snap-agent.ko
+mount -o ro,noexec,noload /dev/snap1 /mnt/snap/
+make clean
