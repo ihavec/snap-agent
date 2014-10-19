@@ -25,8 +25,8 @@
 #define MIN_NICE -20
 #endif
 
-#define TARGET_NAME "/dev/sda"
-#define SNAP_DEVICE_NAME "snap"
+#define TARGET_NAME "/dev/sda1"
+#define SNAP_DEVICE_NAME "snaps"
 #define COW_FILE_NAME "/root/cowfile.snap"
 
 struct copy_map{
@@ -187,7 +187,7 @@ static void handle_bio(struct snap_device *dev, struct bio *bio){
 		orig_end_io = bio->bi_end_io;
 		
 		//submit the bio to the base device and wait for completion
-		bio->bi_bdev = dev->sd_base_dev;
+		bio->bi_bdev = dev->sd_base_dev->bd_contains;
 		bio_get(bio);
 		submit_bio_wait(READ | REQ_SYNC, bio);
 		
@@ -208,11 +208,6 @@ static void handle_bio(struct snap_device *dev, struct bio *bio){
 				data += 512;
 			}
 		}
-		
-		/*
-		bio->bi_bdev = dev->sd_base_dev;
-		submit_bio_wait(READ | REQ_SYNC, bio);
-		*/
 		
 		bio_endio(bio, 0);
 		bio_put(bio);
@@ -341,7 +336,6 @@ trace_exit:
 //request handler
 static void snap_make_request(struct request_queue *q, struct bio *bio){
 	//queue bio for processing by kernel thread
-	
 	bio_get(bio);
 	spin_lock_irq(&snap->sd_bio_lock);
 	bio_list_add(&snap->sd_pending_bios, bio);
@@ -375,6 +369,7 @@ static int setup_backing_device(struct snap_device *dev, const char *target_name
 		printk(KERN_ERR "snap: unable to find block device '%s'\n", target_name);
 		return PTR_ERR(dev->sd_base_dev);
 	}
+	//dev->sd_base_dev = dev->sd_base_dev->bd_contains;
 
 	//check for target device gendisk
 	printk(KERN_ERR "snap: get block device gendisk\n");
@@ -469,6 +464,7 @@ static int setup_snap_device(struct snap_device *dev, const char *target_name, c
 	dev->sd_gd->queue = dev->sd_queue;
 	dev->sd_gd->private_data = dev;
 	dev->sd_gd->flags |= GENHD_FL_EXT_DEVT;
+	dev->sd_gd->flags |= GENHD_FL_NO_PART_SCAN; //testing
 
 	//setup target device and adapt our gendisk to look like it
 	printk(KERN_ERR "snap: setting up backing device\n");
@@ -585,6 +581,7 @@ static int __init snap_init(void){
 		printk(KERN_ERR "snap: error setting up tracing\n");
 		return ret;
 	}
+	
 	
 	//setup timer for debugging
 	printk(KERN_ERR "snap: setting up debug timer\n");
