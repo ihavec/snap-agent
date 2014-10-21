@@ -20,11 +20,6 @@
 #include <trace/events/block.h>
 #include <linux/kthread.h>
 
-#define DELAY(); \
-	printk(KERN_INFO "filter: FUNCTION=%s LINE=%d\n", __FUNCTION__, __LINE__); \
-        set_current_state(TASK_UNINTERRUPTIBLE); \
-        schedule_timeout(HZ * 5);
-
 //this is defined in 3.16 and up
 #ifndef MIN_NICE
 #define MIN_NICE -20
@@ -84,7 +79,7 @@ static struct copy_map *alloc_copy_map(unsigned short page_cnt){
 	//allocate copy_map struct
 	cmap = kmalloc(sizeof(struct copy_map), GFP_NOIO);
 	if(!cmap){
-		printk(KERN_ERR "snap: could not allocate copy map\n");
+		printk(KERN_ERR "datto: could not allocate copy map\n");
 		return NULL;
 	}
 	
@@ -96,7 +91,7 @@ static struct copy_map *alloc_copy_map(unsigned short page_cnt){
 	//allocate bitmap
 	cmap->bitmap = kzalloc(byte_cnt, GFP_NOIO);
 	if(!cmap->bitmap){
-		printk(KERN_ERR "snap: could not allocate copy map bitmap\n");
+		printk(KERN_ERR "datto: could not allocate copy map bitmap\n");
 		kfree(cmap);
 		return NULL;
 	}
@@ -125,7 +120,7 @@ static void write_sector(struct snap_device *dev, sector_t sect, char *data){
 	//perform the write
 	ret = vfs_write(dev->sd_cow_file, data, 512, &offset);
 	if(ret < 512){
-		printk(KERN_ERR "snap: write failed to sector %llu\n", sect);
+		printk(KERN_ERR "datto: write failed to sector %llu\n", sect);
 	}
 	
 	//revert context
@@ -144,7 +139,7 @@ static void read_sector(struct snap_device *dev, sector_t sect, char *data){
 	//perform the write
 	ret = vfs_read(dev->sd_cow_file, data, 512, &offset);
 	if(ret < 512){
-		printk(KERN_ERR "snap: write failed to sector %llu\n", sect);
+		printk(KERN_ERR "datto: write failed to sector %llu\n", sect);
 	}
 	
 	//revert context
@@ -273,7 +268,7 @@ static void trace_bio(struct snap_device *dev, struct bio *bio){
 		//allocate the read bio
 		readbio = bio_alloc(GFP_NOIO, bio->bi_vcnt);
 		if(!readbio){
-			printk(KERN_ERR "snap: read bio allocation failed\n");
+			printk(KERN_ERR "datto: read bio allocation failed\n");
 			goto trace_exit;
 		}
 		
@@ -285,7 +280,7 @@ static void trace_bio(struct snap_device *dev, struct bio *bio){
 		//allocate copy_map
 		cmap = alloc_copy_map(bio->bi_vcnt);
 		if(!cmap){
-			printk(KERN_ERR "snap: copy_map allocation failed\n");
+			printk(KERN_ERR "datto: copy_map allocation failed\n");
 			goto trace_exit;
 		}
 		
@@ -298,7 +293,7 @@ static void trace_bio(struct snap_device *dev, struct bio *bio){
 			//allocate a page and add it to our bio
 			pg = alloc_page(GFP_NOIO);
 			if(!pg){
-				printk(KERN_ERR "snap: read bio page %d allocation failed\n", i);
+				printk(KERN_ERR "datto: read bio page %d allocation failed\n", i);
 				goto trace_exit;
 			}
 			bio_add_page(readbio, pg, bvec->bv_len, bvec->bv_offset);
@@ -326,7 +321,7 @@ static void trace_bio(struct snap_device *dev, struct bio *bio){
 		
 		//check that read was successful
 		if(!test_bit(BIO_UPTODATE, &readbio->bi_flags)){
-			printk(KERN_ERR "snap: read of original sector failed\n");
+			printk(KERN_ERR "datto: read of original sector failed\n");
 			goto trace_exit;
 		}
 		
@@ -351,10 +346,6 @@ trace_exit:
 		}
 		bio_put(readbio);
 	}
-}
-
-static void on_request(void *ignore, struct request_queue *q, struct bio *bio){
-	trace_bio(snap, bio);
 }
 
 static void tracing_make_request_function(struct request_queue *q, struct bio *bio){
@@ -388,18 +379,17 @@ static int set_make_request_fn(struct snap_device *dev){
 	struct super_block *sb;
 	
 	//freeze and sync block device
-	printk(KERN_ERR "snap: freezing block device\n");
-	//DELAY();
+	printk(KERN_ERR "datto: freezing block device\n");
 	sb = freeze_bdev(dev->sd_base_dev);
 	
 	//replace make request function with our own tracing version
-	printk(KERN_ERR "snap: replacing make request function: %p:\n", dev->sd_base_dev->bd_disk->queue->make_request_fn);
+	printk(KERN_ERR "datto: replacing make request function: %p:\n", dev->sd_base_dev->bd_disk->queue->make_request_fn);
 	dev->sd_orig_mrf = dev->sd_base_dev->bd_disk->queue->make_request_fn;
 	dev->sd_base_dev->bd_disk->queue->make_request_fn = tracing_make_request_function;
 	
 	//thaw the block device
 	ret = thaw_bdev(dev->sd_base_dev, sb);
-	printk(KERN_ERR "snap: thawed block device: %p:\n", dev->sd_base_dev->bd_disk->queue->make_request_fn);
+	printk(KERN_ERR "datto: thawed block device: %p:\n", dev->sd_base_dev->bd_disk->queue->make_request_fn);
 	
 	return 0;
 }
@@ -410,17 +400,16 @@ static int restore_make_request_fn(struct snap_device *dev){
 	struct super_block *sb;
 	
 	//freeze and sync block device
-	printk(KERN_ERR "snap: freezing block device\n");
-	//DELAY();
+	printk(KERN_ERR "datto: freezing block device\n");
 	sb = freeze_bdev(dev->sd_base_dev);
 	
 	//restore the original make request function
-	printk(KERN_ERR "snap: restoring make request function: %p:\n", dev->sd_base_dev->bd_disk->queue->make_request_fn);
+	printk(KERN_ERR "datto: restoring make request function: %p:\n", dev->sd_base_dev->bd_disk->queue->make_request_fn);
 	dev->sd_base_dev->bd_disk->queue->make_request_fn = dev->sd_orig_mrf;
 	dev->sd_orig_mrf = NULL;
 	
 	//thaw the block device
-	printk(KERN_ERR "snap: thawing block device: %p:\n", dev->sd_base_dev->bd_disk->queue->make_request_fn);
+	printk(KERN_ERR "datto: thawing block device: %p:\n", dev->sd_base_dev->bd_disk->queue->make_request_fn);
 	ret = thaw_bdev(dev->sd_base_dev, sb);
 	
 	return 0;
@@ -430,31 +419,30 @@ static int setup_backing_device(struct snap_device *dev, const char *target_name
 	struct request_queue *q;
 
 	//get reference target block device
-	printk(KERN_ERR "snap: find block device '%s'\n", target_name);
+	printk(KERN_ERR "datto: find block device '%s'\n", target_name);
 	dev->sd_base_dev = blkdev_get_by_path(target_name, FMODE_READ, dev);
 	if(IS_ERR(dev->sd_base_dev)){
-		printk(KERN_ERR "snap: unable to find block device '%s'\n", target_name);
+		printk(KERN_ERR "datto: unable to find block device '%s'\n", target_name);
 		return PTR_ERR(dev->sd_base_dev);
 	}
-	//dev->sd_base_dev = dev->sd_base_dev->bd_contains;
 
 	//check for target device gendisk
-	printk(KERN_ERR "snap: get block device gendisk\n");
+	printk(KERN_ERR "datto: get block device gendisk\n");
 	if(!dev->sd_base_dev->bd_disk){
-		printk(KERN_ERR "snap: block device did not have a gendisk\n");
+		printk(KERN_ERR "datto: block device did not have a gendisk\n");
 		return -EFAULT;
 	}
 
 	//get target device queue
-	printk(KERN_ERR "snap: get block device queue\n");
+	printk(KERN_ERR "datto: get block device queue\n");
 	q = bdev_get_queue(dev->sd_base_dev);
 	if(!q){
-		printk(KERN_ERR "snap: block device did not have a request queue\n");
+		printk(KERN_ERR "datto: block device did not have a request queue\n");
 		return -EFAULT;
 	}
 
 	//give our request queue the same properties as the target device
-	printk(KERN_ERR "snap: set queue limits\n");
+	printk(KERN_ERR "datto: set queue limits\n");
 	dev->sd_gd->queue->limits.max_hw_sectors= q->limits.max_hw_sectors;
 	dev->sd_gd->queue->limits.max_sectors = q->limits.max_sectors;
 	dev->sd_gd->queue->limits.max_segment_size	= q->limits.max_segment_size;
@@ -466,7 +454,7 @@ static int setup_backing_device(struct snap_device *dev, const char *target_name
 	dev->sd_size = get_capacity(dev->sd_base_dev->bd_disk);
 	
 	//name our gendisk
-	printk(KERN_ERR "snap: name disk\n");
+	printk(KERN_ERR "datto: name disk\n");
 	snprintf (dev->sd_gd->disk_name, 32, SNAP_DEVICE_NAME);
 	
 	return 0;
@@ -476,7 +464,7 @@ static int setup_cow_file(struct snap_device *dev, const char *cow_name){
 	struct file	*f;
 	
 	//create and open cow file
-	printk(KERN_ERR "snap: create/open cow file '%s'\n", cow_name);
+	printk(KERN_ERR "datto: create/open cow file '%s'\n", cow_name);
 	f = filp_open(cow_name, O_RDWR | O_CREAT | O_LARGEFILE, 0);
 	if (f == NULL || IS_ERR(f)) {
 		printk(KERN_ERR "agent: open/create of cow file '%s' failed\n", cow_name);
@@ -484,7 +472,7 @@ static int setup_cow_file(struct snap_device *dev, const char *cow_name){
 	}
 	
 	//check that cow file is a regular file
-	printk(KERN_ERR "snap: check that cow file is regular file\n");
+	printk(KERN_ERR "datto: check that cow file is regular file\n");
 	if(!S_ISREG(f->f_dentry->d_inode->i_mode)){
 		printk(KERN_ERR "agent: '%s' is not a regular file\n", cow_name);
 		return -EINVAL;
@@ -503,28 +491,27 @@ static int setup_snap_device(struct snap_device *dev, const char *target_name, c
 	unsigned long bitmap_len;
 	
 	//allocate request queue
-	printk(KERN_ERR "snap: allocate queue\n");
+	printk(KERN_ERR "datto: allocate queue\n");
 	dev->sd_queue = blk_alloc_queue(GFP_KERNEL);
 	if (!dev->sd_queue){
-		printk(KERN_ERR "snap: unable to allocate queue\n");
+		printk(KERN_ERR "datto: unable to allocate queue\n");
 		return -ENOMEM;
 	}
 
 	//register request handler
-	printk(KERN_ERR "snap: setup make request function\n");
+	printk(KERN_ERR "datto: setup make request function\n");
 	blk_queue_make_request(dev->sd_queue, snap_make_request);
-	blk_queue_flush(dev->sd_queue, REQ_FLUSH | REQ_FUA);
 
 	//allocate a gendisk struct
-	printk(KERN_ERR "snap: allocate gendisk struct\n");
+	printk(KERN_ERR "datto: allocate gendisk struct\n");
 	dev->sd_gd = alloc_disk(1);
 	if (!dev->sd_gd) {
-		printk(KERN_ERR "snap: unable to allocate gendisk struct\n");
+		printk(KERN_ERR "datto: unable to allocate gendisk struct\n");
 		return -ENOMEM;
 	}
 
 	//initialize gendisk struct
-	printk(KERN_ERR "snap: initialize gendisk\n");
+	printk(KERN_ERR "datto: initialize gendisk\n");
 	dev->sd_gd->major = major;
 	dev->sd_gd->first_minor = 0;
 	dev->sd_gd->fops = &snap_ops;
@@ -534,44 +521,44 @@ static int setup_snap_device(struct snap_device *dev, const char *target_name, c
 	//dev->sd_gd->flags |= GENHD_FL_NO_PART_SCAN; //testing
 
 	//setup target device and adapt our gendisk to look like it
-	printk(KERN_ERR "snap: setting up backing device\n");
+	printk(KERN_ERR "datto: setting up backing device\n");
 	ret = setup_backing_device(dev, target_name);
 	if(ret != 0){
-		printk(KERN_ERR "snap: error setting up backing device\n");
+		printk(KERN_ERR "datto: error setting up backing device\n");
 		return ret;
 	}
 	
 	//set up cow file
-	printk(KERN_ERR "snap: setting up cow file\n");
+	printk(KERN_ERR "datto: setting up cow file\n");
 	ret = setup_cow_file(dev, cow_name);
 	if(ret != 0){
-		printk(KERN_ERR "snap: error setting up cow file\n");
+		printk(KERN_ERR "datto: error setting up cow file\n");
 		return ret;
 	}
 	
 	//allocate memory for the bitmap
-	printk(KERN_ERR "snap: allocating memory for bitmap\n");
+	printk(KERN_ERR "datto: allocating memory for bitmap\n");
 	bitmap_len = dev->sd_size/8;
 	if(dev->sd_size % 8 != 0) bitmap_len++;
 	dev->sd_bitmap = vzalloc(bitmap_len);
 	if(!dev->sd_bitmap){
-		printk(KERN_ERR "snap: could not allocate memory for bitmap\n");
+		printk(KERN_ERR "datto: could not allocate memory for bitmap\n");
 		return -ENOMEM;
 	}
-	printk(KERN_ERR "snap: bitmap occupies %lu bytes at address %p\n", bitmap_len, dev->sd_bitmap);
+	printk(KERN_ERR "datto: bitmap occupies %lu bytes at address %p\n", bitmap_len, dev->sd_bitmap);
 	
 	//initialize non-pointer fields
-	printk(KERN_ERR "snap: initializing non-pointer fields\n");
+	printk(KERN_ERR "datto: initializing non-pointer fields\n");
 	bio_list_init(&dev->sd_pending_bios);
 	spin_lock_init(&dev->sd_bio_lock);
 	mutex_init(&dev->sd_ctl_mutex);
 	init_waitqueue_head(&dev->sd_bio_event);
 	
 	//start kthread for managing incoming bios
-	printk(KERN_ERR "snap: creating kernel hread\n");
+	printk(KERN_ERR "datto: creating kernel hread\n");
 	dev->sd_kthread = kthread_run(snap_bio_thread, dev, "snap%d", dev->sd_minor);
 	if(IS_ERR(dev->sd_kthread)){
-		printk(KERN_ERR "snap: error creating kernel hread\n");
+		printk(KERN_ERR "datto: error creating kernel hread\n");
 		return PTR_ERR(dev->sd_kthread);
 	}
 	
@@ -579,24 +566,25 @@ static int setup_snap_device(struct snap_device *dev, const char *target_name, c
 	set_make_request_fn(dev);
 	
 	//register gendisk with the kernel
-	printk(KERN_ERR "snap: add disk\n");
-	//DELAY();
+	printk(KERN_ERR "datto: add disk\n");
 	add_disk(dev->sd_gd);
 
 	return 0;
 }
 
 static void debug_timer_cb(unsigned long data){
-	printk(KERN_ERR "snap: writes - %d : %d\n", snap->writes_performed, snap->writes_intercepted);
+	printk(KERN_ERR "datto: writes - %d : %d\n", snap->writes_performed, snap->writes_intercepted);
 	mod_timer(&timer, jiffies + msecs_to_jiffies(5000));
 }
 
 static void destroy_snap_device(struct snap_device *dev){
-	//unallocate the gendisk and queue
+	//deallocate the gendisk
 	if(dev->sd_gd) {
 		del_gendisk(dev->sd_gd);
 		put_disk(dev->sd_gd);
 	}
+	
+	//deallocate queue
 	if(dev->sd_queue) blk_cleanup_queue(dev->sd_queue);
 	
 	//stop tracing
@@ -622,70 +610,60 @@ static void destroy_snap_device(struct snap_device *dev){
 
 static int __init snap_init(void){
 	int ret;
-	struct super_block *sb;
+	
+	printk(KERN_ERR "datto: module init\n");
 
 	//allocate struct
-	printk(KERN_ERR "snap: allocate device struct\n");
+	printk(KERN_ERR "datto: allocate device struct\n");
 	snap = kzalloc(sizeof(struct snap_device), GFP_KERNEL);
 	if(!snap){
-		printk(KERN_ERR "snap: unable to allocate device struct\n");
+		printk(KERN_ERR "datto: unable to allocate device struct\n");
 		return -ENOMEM;
 	}
 
 	//get a major number for the driver
-	printk(KERN_ERR "snap: get major number\n");
+	printk(KERN_ERR "datto: get major number\n");
 	major = register_blkdev(0, SNAP_DEVICE_NAME);
 	if(major <= 0){
-		printk(KERN_ERR "snap: unable to get major number\n");
+		printk(KERN_ERR "datto: unable to get major number\n");
 		return -EBUSY;
 	}
 
 	//setup device
-	printk(KERN_ERR "snap: setup snap device - %p %s\n", snap, TARGET_NAME);
+	printk(KERN_ERR "datto: setup snap device - %p %s\n", snap, TARGET_NAME);
 	ret = setup_snap_device(snap, TARGET_NAME, COW_FILE_NAME);
 	if(ret != 0){
-		printk(KERN_ERR "snap: error setting up snap device\n");
+		printk(KERN_ERR "datto: error setting up snap device\n");
 		unregister_blkdev(major, SNAP_DEVICE_NAME);
 		return ret;
 	}
-	/*
-	//setup tracing
-	sb = freeze_bdev(snap->sd_base_dev);
-	printk(KERN_ERR "snap: setting up tracing\n");
-	ret = register_trace_block_bio_queue(on_request, NULL);
-	if(ret){
-		printk(KERN_ERR "snap: error setting up tracing\n");
-		return ret;
-	}
-	thaw_bdev(snap->sd_base_dev, sb);
-	*/
 	
 	//setup timer for debugging
-	printk(KERN_ERR "snap: setting up debug timer\n");
+	printk(KERN_ERR "datto: setting up debug timer\n");
 	setup_timer(&timer, debug_timer_cb, 0);
 	ret = mod_timer(&timer, jiffies + msecs_to_jiffies(5000));
 	if(ret){
-		printk(KERN_ERR "snap: error setting up debug timer\n");
+		printk(KERN_ERR "datto: error setting up debug timer\n");
 		return ret;
 	}
 	return 0;
 }
 
 static void __exit snap_exit(void){
+	printk(KERN_ERR "datto: module exit\n");
 	//destroy our device
+	printk(KERN_ERR "datto: destroying device struct\n");
 	destroy_snap_device(snap);
 	
 	//unregister our block device driver
-	//unregister_blkdev(major, SNAP_DEVICE_NAME);
-	
-	//stop tracing
-	//unregister_trace_block_bio_queue(on_request, NULL);
+	printk(KERN_ERR "datto: unregistering device driver from the kernel\n");
+	unregister_blkdev(major, SNAP_DEVICE_NAME);
 	
 	//free our debug timer
+	printk(KERN_ERR "datto: deleting debug timer\n");
 	del_timer(&timer);
 }
 
 //module stuff
-MODULE_LICENSE("GPL");
 module_init(snap_init);
 module_exit(snap_exit);
