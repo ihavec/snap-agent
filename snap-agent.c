@@ -20,13 +20,18 @@
 #include <trace/events/block.h>
 #include <linux/kthread.h>
 
+#define DELAY(); \
+	printk(KERN_INFO "filter: FUNCTION=%s LINE=%d\n", __FUNCTION__, __LINE__); \
+        set_current_state(TASK_UNINTERRUPTIBLE); \
+        schedule_timeout(HZ * 5);
+
 //this is defined in 3.16 and up
 #ifndef MIN_NICE
 #define MIN_NICE -20
 #endif
 
 #define TARGET_NAME "/dev/sda1"
-#define SNAP_DEVICE_NAME "snap"
+#define SNAP_DEVICE_NAME "datto"
 #define COW_FILE_NAME "/root/cowfile.snap"
 
 struct copy_map{
@@ -35,6 +40,7 @@ struct copy_map{
 };
 
 struct snap_device{
+	unsigned int sd_state; //current state of device
 	unsigned int sd_minor; //minor number of device
 	unsigned int sd_refs; //number of users who have this snap device open
 	sector_t sd_size; //size of device in sectors
@@ -246,6 +252,11 @@ static inline unsigned long bvec_get_inode(struct bio_vec *bvec){
 	return bvec->bv_page->mapping->host->i_ino;
 }
 
+static void on_bio_read_complete(struct bio *bio, int err){
+	//end completion in on_requesst
+	complete((struct completion *)bio->bi_private);
+}
+
 //note do not printk in this function or the kernel will freeze
 static void trace_bio(struct snap_device *dev, struct bio *bio){
 	int i, pages_marked = 0;
@@ -254,6 +265,7 @@ static void trace_bio(struct snap_device *dev, struct bio *bio){
 	struct page *pg;
 	struct copy_map *cmap = NULL;
 	unsigned short bio_orig_idx;
+	struct completion event;
 	
 	if(bio_data_dir(bio)) {
 		dev->writes_intercepted++; //for debug
@@ -268,6 +280,7 @@ static void trace_bio(struct snap_device *dev, struct bio *bio){
 		//populate read bio
 		readbio->bi_bdev = bio->bi_bdev;
 		readbio->bi_sector = bio->bi_sector;
+		readbio->bi_rw |= READ;
 		
 		//allocate copy_map
 		cmap = alloc_copy_map(bio->bi_vcnt);
@@ -301,9 +314,15 @@ static void trace_bio(struct snap_device *dev, struct bio *bio){
 		//if all sectors belong to the cow file, we don't need to trace this bio
 		if(!pages_marked) goto trace_exit;
 		
+		//prepare completion
+		init_completion(&event);
+		readbio->bi_private = &event;
+		readbio->bi_end_io = on_bio_read_complete;
+		
 		//submit the bio and wait for the read to complete
-		bio_get(readbio);
-		submit_bio_wait(READ | REQ_SYNC, readbio);
+		//bio_get(readbio);
+		dev->sd_orig_mrf(bdev_get_queue(readbio->bi_bdev), readbio);
+		wait_for_completion(&event);
 		
 		//check that read was successful
 		if(!test_bit(BIO_UPTODATE, &readbio->bi_flags)){
@@ -338,14 +357,11 @@ static void on_request(void *ignore, struct request_queue *q, struct bio *bio){
 	trace_bio(snap, bio);
 }
 
-/*
 static void tracing_make_request_function(struct request_queue *q, struct bio *bio){
 	//TODO should iterate over all devices, but there's only 1 right now
-	//if the intercepted bio is a write trace it
-	//trace_bio(snap, bio);
+	trace_bio(snap, bio);	
 	snap->sd_orig_mrf(q, bio);
 }
-*/
 
 /***************************BLOCK DEVICE DRIVER***************************/
 
@@ -366,7 +382,6 @@ static struct block_device_operations snap_ops = {
 /************************DEVICE SETUP AND DESTROY************************/
 
 //setup helper functions
-/*
 static int set_make_request_fn(struct snap_device *dev){
 	//TODO error handling
 	int ret;
@@ -374,6 +389,7 @@ static int set_make_request_fn(struct snap_device *dev){
 	
 	//freeze and sync block device
 	printk(KERN_ERR "snap: freezing block device\n");
+	//DELAY();
 	sb = freeze_bdev(dev->sd_base_dev);
 	
 	//replace make request function with our own tracing version
@@ -382,8 +398,8 @@ static int set_make_request_fn(struct snap_device *dev){
 	dev->sd_base_dev->bd_disk->queue->make_request_fn = tracing_make_request_function;
 	
 	//thaw the block device
-	printk(KERN_ERR "snap: thawing block device: %p:\n", dev->sd_base_dev->bd_disk->queue->make_request_fn);
 	ret = thaw_bdev(dev->sd_base_dev, sb);
+	printk(KERN_ERR "snap: thawed block device: %p:\n", dev->sd_base_dev->bd_disk->queue->make_request_fn);
 	
 	return 0;
 }
@@ -395,6 +411,7 @@ static int restore_make_request_fn(struct snap_device *dev){
 	
 	//freeze and sync block device
 	printk(KERN_ERR "snap: freezing block device\n");
+	//DELAY();
 	sb = freeze_bdev(dev->sd_base_dev);
 	
 	//restore the original make request function
@@ -408,7 +425,6 @@ static int restore_make_request_fn(struct snap_device *dev){
 	
 	return 0;
 }
-*/
 
 static int setup_backing_device(struct snap_device *dev, const char *target_name){
 	struct request_queue *q;
@@ -560,10 +576,11 @@ static int setup_snap_device(struct snap_device *dev, const char *target_name, c
 	}
 	
 	//setup tracing
-	//set_make_request_fn(dev);
+	set_make_request_fn(dev);
 	
 	//register gendisk with the kernel
 	printk(KERN_ERR "snap: add disk\n");
+	//DELAY();
 	add_disk(dev->sd_gd);
 
 	return 0;
@@ -583,7 +600,7 @@ static void destroy_snap_device(struct snap_device *dev){
 	if(dev->sd_queue) blk_cleanup_queue(dev->sd_queue);
 	
 	//stop tracing
-	//restore_make_request_fn(dev);
+	restore_make_request_fn(dev);
 	
 	//put the target device back
 	blkdev_put(dev->sd_base_dev, FMODE_READ);
@@ -631,9 +648,7 @@ static int __init snap_init(void){
 		unregister_blkdev(major, SNAP_DEVICE_NAME);
 		return ret;
 	}
-	
-	
-	
+	/*
 	//setup tracing
 	sb = freeze_bdev(snap->sd_base_dev);
 	printk(KERN_ERR "snap: setting up tracing\n");
@@ -643,6 +658,7 @@ static int __init snap_init(void){
 		return ret;
 	}
 	thaw_bdev(snap->sd_base_dev, sb);
+	*/
 	
 	//setup timer for debugging
 	printk(KERN_ERR "snap: setting up debug timer\n");
@@ -660,10 +676,10 @@ static void __exit snap_exit(void){
 	destroy_snap_device(snap);
 	
 	//unregister our block device driver
-	unregister_blkdev(major, SNAP_DEVICE_NAME);
+	//unregister_blkdev(major, SNAP_DEVICE_NAME);
 	
 	//stop tracing
-	unregister_trace_block_bio_queue(on_request, NULL);
+	//unregister_trace_block_bio_queue(on_request, NULL);
 	
 	//free our debug timer
 	del_timer(&timer);
